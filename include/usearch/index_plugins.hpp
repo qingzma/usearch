@@ -106,6 +106,7 @@ enum class metric_kind_t : std::uint8_t {
     ip_k = 'i',
     cos_k = 'c',
     l2sq_k = 'e',
+    l2sq_skip2_k = 'k',
 
     // Custom:
     pearson_k = 'p',
@@ -236,6 +237,7 @@ inline char const* metric_kind_name(metric_kind_t metric) noexcept {
     case metric_kind_t::ip_k: return "ip";
     case metric_kind_t::cos_k: return "cos";
     case metric_kind_t::l2sq_k: return "l2sq";
+    case metric_kind_t::l2sq_skip2_k: return "l2sq_skip2";
     case metric_kind_t::pearson_k: return "pearson";
     case metric_kind_t::haversine_k: return "haversine";
     case metric_kind_t::divergence_k: return "divergence";
@@ -1052,6 +1054,28 @@ template <typename scalar_at = float, typename result_at = scalar_at> struct met
     }
 };
 
+template <typename scalar_at = float, typename result_at = scalar_at> struct metric_l2sq_skip2_gt {
+    using scalar_t = scalar_at;
+    using result_t = result_at;
+
+    inline result_t operator()(scalar_t const* a, scalar_t const* b, std::size_t dim) const noexcept {
+        result_t ab_deltas_sq{};
+#if USEARCH_USE_OPENMP
+#pragma omp simd reduction(+ : ab_deltas_sq)
+#elif defined(USEARCH_DEFINED_CLANG)
+#pragma clang loop vectorize(enable)
+#elif defined(USEARCH_DEFINED_GCC)
+#pragma GCC ivdep
+#endif
+        for (std::size_t i = 2; i != dim; ++i) {
+            result_t ai = static_cast<result_t>(a[i]);
+            result_t bi = static_cast<result_t>(b[i]);
+            ab_deltas_sq += square(ai - bi);
+        }
+        return ab_deltas_sq;
+    }
+};
+
 /**
  *  @brief  Hamming distance computes the number of differing bits in
  *          two arrays of integers. An example would be a textual document,
@@ -1597,6 +1621,18 @@ class metric_punned_t {
             case scalar_kind_t::f16_k: metric_ptr_ = (uptr_t)&equidimensional_<metric_l2sq_gt<f16_t, f32_t>>; break;
             case scalar_kind_t::i8_k: metric_ptr_ = (uptr_t)&equidimensional_<metric_l2sq_gt<i8_t, f32_t>>; break;
             case scalar_kind_t::f64_k: metric_ptr_ = (uptr_t)&equidimensional_<metric_l2sq_gt<f64_t>>; break;
+            default: metric_ptr_ = 0; break;
+            }
+            break;
+        }
+        case metric_kind_t::l2sq_skip2_k: {
+            switch (scalar_kind_) {
+            case scalar_kind_t::f32_k: metric_ptr_ = (uptr_t)&equidimensional_<metric_l2sq_skip2_gt<f32_t>>; break;
+            case scalar_kind_t::f16_k:
+                metric_ptr_ = (uptr_t)&equidimensional_<metric_l2sq_skip2_gt<f16_t, f32_t>>;
+                break;
+            case scalar_kind_t::i8_k: metric_ptr_ = (uptr_t)&equidimensional_<metric_l2sq_skip2_gt<i8_t, f32_t>>; break;
+            case scalar_kind_t::f64_k: metric_ptr_ = (uptr_t)&equidimensional_<metric_l2sq_skip2_gt<f64_t>>; break;
             default: metric_ptr_ = 0; break;
             }
             break;
